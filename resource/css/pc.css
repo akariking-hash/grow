@@ -287,6 +287,7 @@ body {background: #fffaf0; color: #333333;}
 .pick_btn:active {transform: translateY(4px);}
 .pick_btn:has(input:focus-visible) {outline: 2px solid #3182F6; outline-offset: 2px;}
 .pick_icon {width: 44px; height: 44px;}
+.pick_sub {margin-top: -6px; font-size: 13px; font-weight: 600; color: #6b6b6b;}
 .tips {padding-left: 18px; font-size: 14px; line-height: 1.85; color: #6b6b6b; list-style: disc;}
 
 /* 인식 중 */
@@ -297,6 +298,22 @@ body {background: #fffaf0; color: #333333;}
 .reading_text {margin: 8px 0 12px; font-size: 20px; font-weight: 700;}
 .progress {overflow: hidden; width: 80%; height: 16px; border-radius: 999px; background: #efe6d6;}
 .progress_bar {width: 6%; height: 100%; border-radius: 999px; background: #58cc02; box-shadow: inset 0 -4px 0 rgba(0, 0, 0, 0.08);}
+.progress-full {width: 100%; margin-top: 4px;}
+.batch {display: flex; flex-direction: column; gap: 10px; margin: 16px 0 4px;}
+.batch_item {display: grid; grid-template-columns: 64px 1fr; gap: 12px; padding: 12px; border: 2px solid #efe6d6; border-radius: 18px; background: #ffffff;}
+.batch_item-off {background: #f7f2e8;}
+.batch_item-off .batch_body {opacity: 0.6;}
+.batch_thumb {width: 64px; height: 64px; border-radius: 12px; object-fit: cover; background: #f4ede0;}
+.batch_body {display: flex; flex-direction: column; gap: 8px; min-width: 0;}
+.batch_head {display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px;}
+.batch_check {display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600; cursor: pointer;}
+.batch_checkbox {width: 18px; height: 18px; accent-color: #2b7a0b;}
+.batch_status {font-size: 12px; font-weight: 600; color: #6b6b6b;}
+.batch_status-error {color: #c62828;}
+.batch_fields {display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 6px;}
+.batch_label {display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 12px; font-weight: 600; color: #6b6b6b;}
+.batch_input {width: 100%; min-width: 0; padding: 8px; border: 2px solid #efe6d6; border-radius: 10px; font-size: 15px; font-weight: 600; color: #333333; background: #fffdf8;}
+.batch_input:focus {border-color: #1769c2; background: #ffffff;}
 .confirm_img {width: 100%; max-height: 200px; border-radius: 14px; object-fit: contain; background: #f4ede0;}
 
 /* 토스트 */

@@ -1176,6 +1176,8 @@ function closeSheet() {
     if (!sheet) {
         return;
     }
+    batchRun += 1;
+    batchBusy = false;
     sheet.classList.remove('sheet-open');
     document.body.style.overflow = '';
     if (lastFocus && document.contains(lastFocus)) {
@@ -1332,6 +1334,28 @@ function setProgress(value) {
     $('[data-progress]').setAttribute('aria-valuenow', String(pct));
 }
 
+/** 사진 한 장 → 썸네일, 사진 찍은 날, 인식 결과 */
+async function analyzePhoto(file, onProgress) {
+    const thumb = await resizeImage(file, 240, 0.6);
+    const photoDate = await photoDateOf(file);
+    const useClaude = state.settings.ocrEngine === 'claude' && state.settings.claudeApiKey;
+    const result = useClaude ? await recognizeWithClaude(file, state.settings.claudeApiKey) : await recognizeOnDevice(file, onProgress);
+    return { thumb: thumb, photoDate: photoDate, result: result };
+}
+
+/** 측정일 고르기: 종이에 인쇄된 검진일 > 사진 찍은 날 */
+function pickMeasureDate(result, photoDate) {
+    const child = activeChild();
+    const valid = (d) => d && d >= child.birth && d <= todayIso();
+    if (valid(result.date)) {
+        return { date: result.date, label: '자동 인식' };
+    }
+    if (valid(photoDate)) {
+        return { date: photoDate, label: '사진 찍은 날' };
+    }
+    return { date: '', label: '' };
+}
+
 async function handlePhoto(file) {
     if (!file) {
         return;
@@ -1346,25 +1370,17 @@ async function handlePhoto(file) {
     let errorMessage = '';
     try {
         const preview = await resizeImage(file, 900, 0.8);
-        recordDraft.thumb = await resizeImage(file, 240, 0.6);
         $('[data-reading-img]').src = preview;
         $('[data-reading-img]').hidden = false;
         $('[data-confirm-img]').src = preview;
         $('[data-confirm-img]').hidden = false;
-        const useClaude = state.settings.ocrEngine === 'claude' && state.settings.claudeApiKey;
-        const photoDate = await photoDateOf(file);
-        const result = useClaude ? await recognizeWithClaude(file, state.settings.claudeApiKey) : await recognizeOnDevice(file, setProgress);
+        const analyzed = await analyzePhoto(file, setProgress);
+        const result = analyzed.result;
+        recordDraft.thumb = analyzed.thumb;
         recordDraft.ocr = result;
-        // 측정일: 종이에 인쇄된 검진일 > 사진 찍은 날
-        const child = activeChild();
-        const validDate = (d) => d && d >= child.birth && d <= todayIso();
-        let dateLabel = '';
-        if (validDate(result.date)) {
-            $('[data-field="date"]').value = result.date;
-            dateLabel = '자동 인식';
-        } else if (validDate(photoDate)) {
-            $('[data-field="date"]').value = photoDate;
-            dateLabel = '사진 찍은 날';
+        const picked = pickMeasureDate(result, analyzed.photoDate);
+        if (picked.date) {
+            $('[data-field="date"]').value = picked.date;
         }
         if (result.height) {
             $('[data-field="height"]').value = result.height;
@@ -1376,7 +1392,7 @@ async function handlePhoto(file) {
             const level = result.confidence[key];
             $('[data-tag="' + key + '"]').innerHTML = level === 'none' ? '' : '<span class="tag tag-' + level + '">' + (level === 'high' ? '자동 인식' : '확인 필요') + '</span>';
         });
-        $('[data-tag="date"]').innerHTML = dateLabel ? '<span class="tag tag-high">' + dateLabel + '</span>' : '';
+        $('[data-tag="date"]').innerHTML = picked.label ? '<span class="tag tag-high">' + picked.label + '</span>' : '';
         if (result.rawText) {
             $('[data-raw]').textContent = result.rawText.trim();
             $('[data-raw-wrap]').hidden = false;
@@ -1384,6 +1400,7 @@ async function handlePhoto(file) {
     } catch (error) {
         errorMessage = error && error.message ? error.message : String(error);
     }
+    releaseOcrWorker();
     if (scanTween) {
         scanTween.kill();
     }
@@ -1396,6 +1413,220 @@ async function handlePhoto(file) {
         setConfirmMessage('think', '숫자를 잘 못 찾았어요. 아래에 직접 적어주세요!');
     }
     setStep('confirm');
+}
+
+/* ---------- 여러 장 한 번에 등록 ---------- */
+
+const MAX_BATCH = 30;
+let batchItems = [];
+let batchRun = 0; // 시트를 닫거나 새로 시작하면 바뀌어서 진행 중인 인식을 멈춤
+let batchBusy = false;
+
+function parseAmount(text) {
+    return Number(String(text).replace(',', '.'));
+}
+
+function batchItemValid(item) {
+    const child = activeChild();
+    const h = parseAmount(item.height);
+    const w = parseAmount(item.weight);
+    const okDate = item.date && item.date >= child.birth && item.date <= todayIso();
+    return Boolean(okDate && ((h > 30 && h < 220) || (w > 1 && w < 200)));
+}
+
+function batchDuplicate(item) {
+    const child = activeChild();
+    return state.records.some((r) => r.childId === child.id && r.date === item.date);
+}
+
+function batchStatusText(item) {
+    if (item.status === 'waiting') {
+        return '기다리는 중';
+    }
+    if (item.status === 'reading') {
+        return '읽는 중…';
+    }
+    if (item.date && batchDuplicate(item)) {
+        return '같은 날 기록이 이미 있어요';
+    }
+    if (!item.date) {
+        return '측정일을 넣어주세요';
+    }
+    if (!item.found) {
+        if (batchItemValid(item)) {
+            return '직접 입력';
+        }
+        return item.status === 'error' ? '읽지 못했어요 · 직접 입력' : '숫자를 못 찾았어요 · 직접 입력';
+    }
+    const dateFrom = item.label === '사진 찍은 날' ? '사진 찍은 날' : '결과지 날짜';
+    return dateFrom + ' · 숫자 자동 인식';
+}
+
+/** 저장 전에 손봐야 하는 상태면 빨간 글씨 */
+function batchStatusIsError(item) {
+    if (item.status === 'waiting' || item.status === 'reading') {
+        return false;
+    }
+    return !item.date || batchDuplicate(item) || !batchItemValid(item);
+}
+
+function renderBatchItem(index) {
+    const item = batchItems[index];
+    const li = $('[data-batch-index="' + index + '"]');
+    const busy = item.status === 'waiting' || item.status === 'reading';
+    const child = activeChild();
+    const statusError = batchStatusIsError(item);
+    li.classList.toggle('batch_item-off', !item.include);
+    li.innerHTML =
+        '<img src="' + (item.thumb || 'resource/images/favicon.svg') + '" class="batch_thumb" alt="' + (index + 1) + '번째 사진" width="64" height="64" loading="lazy">' +
+        '<div class="batch_body"><div class="batch_head">' +
+        '<label class="batch_check"><input type="checkbox" class="batch_checkbox" data-batch-check' + (item.include ? ' checked' : '') + (busy ? ' disabled' : '') + '>저장</label>' +
+        '<span class="batch_status' + (statusError ? ' batch_status-error' : '') + '" data-batch-status>' + batchStatusText(item) + '</span></div>' +
+        '<div class="batch_fields">' +
+        '<label class="batch_label batch_label-date">측정일<input type="date" class="batch_input" data-batch-field="date" value="' + item.date + '" min="' + child.birth + '" max="' + todayIso() + '"' + (busy ? ' disabled' : '') + '></label>' +
+        '<label class="batch_label">키 (cm)<input type="text" class="batch_input" inputmode="decimal" placeholder="0.0" data-batch-field="height" value="' + escapeHtml(item.height) + '"' + (busy ? ' disabled' : '') + '></label>' +
+        '<label class="batch_label">몸무게 (kg)<input type="text" class="batch_input" inputmode="decimal" placeholder="0.0" data-batch-field="weight" value="' + escapeHtml(item.weight) + '"' + (busy ? ' disabled' : '') + '></label>' +
+        '</div></div>';
+}
+
+function updateBatchSummary() {
+    const count = batchItems.filter((item) => item.include).length;
+    const button = $('[data-batch-save]');
+    button.disabled = batchBusy || count === 0;
+    button.textContent = count ? count + '개 저장하기' : '저장하기';
+}
+
+function setBatchProgress(value) {
+    const pct = Math.round(Math.max(0.03, Math.min(1, value)) * 100);
+    $('[data-batch-progress-bar]').style.width = pct + '%';
+    $('[data-batch-progress]').setAttribute('aria-valuenow', String(pct));
+}
+
+function setBatchMessage(mood, html) {
+    $('[data-batch-mascot]').src = MASCOT[mood];
+    $('[data-batch-message]').innerHTML = html;
+}
+
+async function handlePhotos(fileList) {
+    const files = Array.from(fileList).slice(0, MAX_BATCH);
+    batchRun += 1;
+    const run = batchRun;
+    batchBusy = true;
+    batchItems = files.map(() => ({ status: 'waiting', include: false, touched: false, found: false, date: '', height: '', weight: '', thumb: null, label: '' }));
+    $('[data-batch-list]').innerHTML = files.map((f, i) => '<li class="batch_item" data-batch-index="' + i + '"></li>').join('');
+    batchItems.forEach((item, i) => renderBatchItem(i));
+    $('[data-batch-error]').textContent = '';
+    $('[data-batch-progress]').hidden = false;
+    setBatchProgress(0);
+    setBatchMessage('think', '사진 <strong class="speech_em">' + files.length + '장</strong>을 차례대로 읽을게요. 조금만 기다려 주세요!');
+    updateBatchSummary();
+    setStep('batch');
+    if (fileList.length > MAX_BATCH) {
+        showToast('한 번에 ' + MAX_BATCH + '장까지 읽을 수 있어요. 앞의 ' + MAX_BATCH + '장만 읽을게요.');
+    }
+
+    for (let i = 0; i < files.length; i += 1) {
+        if (run !== batchRun) {
+            break;
+        }
+        const item = batchItems[i];
+        item.status = 'reading';
+        renderBatchItem(i);
+        setBatchMessage('think', '사진을 읽는 중이에요… <strong class="speech_em">' + (i + 1) + ' / ' + files.length + '</strong>');
+        try {
+            const analyzed = await analyzePhoto(files[i], (p) => setBatchProgress((i + p) / files.length));
+            if (run !== batchRun) {
+                break;
+            }
+            const picked = pickMeasureDate(analyzed.result, analyzed.photoDate);
+            item.thumb = analyzed.thumb;
+            item.date = picked.date;
+            item.label = picked.label;
+            item.height = analyzed.result.height ? String(analyzed.result.height) : '';
+            item.weight = analyzed.result.weight ? String(analyzed.result.weight) : '';
+            item.found = Boolean(analyzed.result.height || analyzed.result.weight);
+            item.status = 'done';
+        } catch (error) {
+            if (run !== batchRun) {
+                break;
+            }
+            item.thumb = item.thumb || (await resizeImage(files[i], 240, 0.6).catch(() => null));
+            item.status = 'error';
+        }
+        // 숫자를 찾았고 날짜가 있고 이미 같은 날 기록이 없으면 저장 대상으로 체크
+        item.include = item.found && batchItemValid(item) && !batchDuplicate(item);
+        renderBatchItem(i);
+        setBatchProgress((i + 1) / files.length);
+        updateBatchSummary();
+    }
+    await releaseOcrWorker();
+    if (run !== batchRun) {
+        return;
+    }
+    batchBusy = false;
+    $('[data-batch-progress]').hidden = true;
+    const ready = batchItems.filter((item) => item.include).length;
+    const missing = batchItems.length - ready;
+    setBatchMessage(ready ? 'happy' : 'think',
+        '다 읽었어요! <strong class="speech_em">' + ready + '장</strong>은 바로 저장할 수 있어요.' +
+        (missing ? ' 체크가 빠진 ' + missing + '장은 숫자를 확인하거나 직접 넣어주세요.' : ' 숫자만 한 번 훑어봐 주세요.'));
+    updateBatchSummary();
+}
+
+function handleBatchInput(input) {
+    const li = input.closest('[data-batch-index]');
+    const index = Number(li.dataset.batchIndex);
+    const item = batchItems[index];
+    item[input.dataset.batchField] = input.value.trim();
+    // 사용자가 체크를 직접 바꾼 적이 없으면, 값이 맞춰지는 대로 자동으로 체크
+    if (!item.touched) {
+        item.include = batchItemValid(item) && !batchDuplicate(item);
+        $('[data-batch-check]', li).checked = item.include;
+        li.classList.toggle('batch_item-off', !item.include);
+    }
+    const status = $('[data-batch-status]', li);
+    status.textContent = batchStatusText(item);
+    status.classList.toggle('batch_status-error', batchStatusIsError(item));
+    updateBatchSummary();
+}
+
+function handleBatchCheck(checkbox) {
+    const li = checkbox.closest('[data-batch-index]');
+    const item = batchItems[Number(li.dataset.batchIndex)];
+    item.include = checkbox.checked;
+    item.touched = true;
+    li.classList.toggle('batch_item-off', !item.include);
+    updateBatchSummary();
+}
+
+function saveBatch() {
+    const child = activeChild();
+    const chosen = batchItems.filter((item) => item.include);
+    const invalid = chosen.filter((item) => !batchItemValid(item));
+    if (invalid.length) {
+        $('[data-batch-error]').textContent = '체크한 사진 중 ' + invalid.length + '장은 측정일이나 숫자가 비어 있거나 범위를 벗어났어요.';
+        return;
+    }
+    const records = chosen.map((item) => {
+        const h = parseAmount(item.height);
+        const w = parseAmount(item.weight);
+        return {
+            id: uid(),
+            childId: child.id,
+            date: item.date,
+            height: h > 30 && h < 220 ? h : null,
+            weight: w > 1 && w < 200 ? w : null,
+            memo: null,
+            source: 'photo',
+            thumb: item.thumb
+        };
+    });
+    closeSheet();
+    update((s) => {
+        s.records = s.records.concat(records);
+    });
+    switchTab('home');
+    showToast(records.length + '개 기록했어요! 🎉');
 }
 
 function submitRecordForm() {
@@ -1531,15 +1762,9 @@ async function recognizeOnDevice(file, onProgress) {
         onProgress(1);
         return Object.assign(led, { rawText: ledText });
     }
-    await loadScript(TESSERACT_URL);
+    const worker = await getOcrWorker();
     let pass = 0;
-    const worker = await Tesseract.createWorker(['kor', 'eng'], 1, {
-        logger: (m) => {
-            if (m.status === 'recognizing text') {
-                onProgress((pass + m.progress) / 2);
-            }
-        }
-    });
+    ocrProgress = (p) => onProgress((pass + p) / 2);
     try {
         const image = await prepareForOcr(file);
         const texts = [];
@@ -1559,7 +1784,41 @@ async function recognizeOnDevice(file, onProgress) {
         // LED에서 찾은 값이 있으면 그것을 우선
         return Object.assign(mergeParsed(led, parsed), { rawText: [ledText].concat(texts).filter(Boolean).join('\n---\n') });
     } finally {
-        await worker.terminate();
+        ocrProgress = () => {};
+    }
+}
+
+/* 글자 인식 엔진은 띄우는 데 시간이 걸려서, 여러 장을 읽는 동안은 하나를 재사용하고 끝나면 닫음 */
+let ocrWorker = null;
+let ocrProgress = () => {};
+
+async function getOcrWorker() {
+    if (!ocrWorker) {
+        await loadScript(TESSERACT_URL);
+        ocrWorker = Tesseract.createWorker(['kor', 'eng'], 1, {
+            logger: (m) => {
+                if (m.status === 'recognizing text') {
+                    ocrProgress(m.progress);
+                }
+            }
+        });
+        ocrWorker.catch(() => {
+            ocrWorker = null;
+        });
+    }
+    return ocrWorker;
+}
+
+async function releaseOcrWorker() {
+    if (!ocrWorker) {
+        return;
+    }
+    const pending = ocrWorker;
+    ocrWorker = null;
+    try {
+        await (await pending).terminate();
+    } catch (error) {
+        // 이미 종료됐거나 만들다 실패한 경우
     }
 }
 
@@ -1687,7 +1946,7 @@ async function importBackup(file) {
 /* ---------- 이벤트 ---------- */
 
 function handleClick(event) {
-    const target = event.target.closest('[data-tab], [data-tab-link], [data-select-child], [data-add-child], [data-open-record], [data-close-sheet], [data-metric], [data-sex], [data-avatar], [data-color], [data-edit-record], [data-remove-record], [data-retake], [data-edit-child], [data-remove-child], [data-export]');
+    const target = event.target.closest('[data-tab], [data-tab-link], [data-select-child], [data-add-child], [data-open-record], [data-close-sheet], [data-metric], [data-sex], [data-avatar], [data-color], [data-edit-record], [data-remove-record], [data-retake], [data-edit-child], [data-remove-child], [data-export], [data-batch-save]');
     if (!target) {
         return;
     }
@@ -1745,15 +2004,29 @@ function handleClick(event) {
         }
     } else if (target.hasAttribute('data-export')) {
         exportBackup();
+    } else if (target.hasAttribute('data-batch-save')) {
+        saveBatch();
+    }
+}
+
+function handleInput(event) {
+    if (event.target.hasAttribute('data-batch-field')) {
+        handleBatchInput(event.target);
     }
 }
 
 function handleChange(event) {
     const target = event.target;
     if (target.hasAttribute('data-photo-input')) {
-        const file = target.files[0];
+        const files = Array.from(target.files);
         target.value = '';
-        handlePhoto(file);
+        if (files.length > 1) {
+            handlePhotos(files);
+        } else {
+            handlePhoto(files[0]);
+        }
+    } else if (target.hasAttribute('data-batch-check')) {
+        handleBatchCheck(target);
     } else if (target.hasAttribute('data-ocr-engine')) {
         update((s) => {
             s.settings.ocrEngine = target.value;
@@ -1824,6 +2097,7 @@ function initApp() {
     render();
     document.addEventListener('click', handleClick);
     document.addEventListener('change', handleChange);
+    document.addEventListener('input', handleInput);
     document.addEventListener('submit', handleSubmit);
     document.addEventListener('keydown', handleKeydown);
     let resizeTimer = null;

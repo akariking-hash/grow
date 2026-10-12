@@ -251,12 +251,14 @@
                     <label class="pick_btn">
                         <img src="resource/images/icons/icon-gallery.svg" class="pick_icon" alt="" width="44" height="44" loading="lazy">
                         앨범에서 고르기
-                        <input type="file" class="blind" accept="image/*" data-photo-input>
+                        <span class="pick_sub">여러 장도 한 번에</span>
+                        <input type="file" class="blind" accept="image/*" multiple data-photo-input>
                     </label>
                 </div>
                 <ul class="tips">
                     <li>숫자가 또렷하게 보이도록 밝은 곳에서 찍어주세요</li>
                     <li>종이가 화면에 꽉 차면 더 잘 읽어요</li>
+                    <li>옛날 사진은 앨범에서 여러 장 골라 한 번에 등록할 수 있어요 (최대 30장)</li>
                     <li data-privacy-tip>사진은 이 기기 안에서만 인식하고, 작은 썸네일만 저장돼요</li>
                 </ul>
             </div>
@@ -309,6 +311,21 @@
                         <button type="submit" class="btn btn-primary actions_grow" data-record-submit>기록 저장</button>
                     </div>
                 </form>
+            </div>
+            <div class="sheet_step" data-step="batch">
+                <div class="speech">
+                    <img src="resource/images/mascot-think.svg" class="speech_mascot speech_mascot-small" alt="" width="72" height="72" loading="lazy" data-batch-mascot>
+                    <p class="speech_bubble" role="status" data-batch-message></p>
+                </div>
+                <div class="progress progress-full" role="progressbar" aria-label="일괄 인식 진행률" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" data-batch-progress>
+                    <div class="progress_bar" data-batch-progress-bar></div>
+                </div>
+                <ul class="batch" data-batch-list></ul>
+                <p class="error" role="alert" data-batch-error></p>
+                <div class="actions actions-end">
+                    <button type="button" class="btn btn-ghost" data-close-sheet>취소</button>
+                    <button type="button" class="btn btn-primary actions_grow" data-batch-save disabled>저장하기</button>
+                </div>
             </div>
         </section>
     </div>
