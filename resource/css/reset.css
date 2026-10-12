@@ -1,0 +1,11 @@
+*, *::before, *::after {box-sizing: border-box;}
+html, body, h1, h2, h3, p, ul, ol, li, figure, dl, dd, table {margin: 0; padding: 0;}
+ul, ol {list-style: none;}
+html {-webkit-text-size-adjust: 100%;}
+body {min-height: 100vh; font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', sans-serif; font-size: 16px; line-height: 1.5; -webkit-font-smoothing: antialiased;}
+img, canvas {display: block; max-width: 100%;}
+button, input, select {margin: 0; font: inherit; color: inherit;}
+button {padding: 0; border: 0; background: none; cursor: pointer;}
+a {color: inherit; text-decoration: none;}
+table {border-collapse: collapse; border-spacing: 0;}
+[hidden] {display: none;}

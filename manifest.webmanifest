@@ -1,0 +1,10 @@
+{
+    "name": "쑥쑥 키린 - 우리 아이 성장 기록",
+    "short_name": "쑥쑥 키린",
+    "start_url": "./",
+    "display": "standalone",
+    "background_color": "#fffaf0",
+    "theme_color": "#fffaf0",
+    "lang": "ko",
+    "icons": [{ "src": "resource/images/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
