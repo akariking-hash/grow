@@ -40,7 +40,7 @@ body {background: #fffaf0; color: #333333;}
 .nav_item[aria-selected="true"] .nav_icon-active {display: block;}
 
 /* 본문 & 패널 */
-.main {max-width: 1080px; margin: 0 auto; padding: 28px 32px 48px;}
+.main {overflow-x: clip; max-width: 1080px; margin: 0 auto; padding: 28px 32px 48px;}
 .main:focus {outline: 0;}
 .panel {display: none;}
 .panel-active {display: block;}
@@ -48,7 +48,7 @@ body {background: #fffaf0; color: #333333;}
 .stack {display: flex; flex-direction: column; gap: 16px;}
 
 /* 홈 */
-.home {display: grid; grid-template-columns: 420px 1fr; gap: 24px; align-items: start;}
+.home {display: grid; grid-template-columns: 420px minmax(0, 1fr); gap: 24px; align-items: start;}
 .home_hero {display: flex; flex-direction: column; gap: 16px;}
 .home_age {font-size: 15px; font-weight: 600; color: #6b6b6b;}
 .home_title {margin-top: 2px; font-size: 32px; font-weight: 700; line-height: 1.25; letter-spacing: -0.03em;}
@@ -98,7 +98,7 @@ body {background: #fffaf0; color: #333333;}
 .card_text + .card_text {margin-top: 6px;}
 
 /* 요약 카드 */
-.stats {display: grid; grid-template-columns: 1fr 1fr; gap: 14px;}
+.stats {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px;}
 .stat {position: relative; overflow: hidden; padding: 18px; border: 2px solid #efe6d6; border-radius: 22px; background: #ffffff; box-shadow: 0 4px 0 #efe6d6;}
 .stat::after {position: absolute; right: -20px; top: -20px; width: 72px; height: 72px; border-radius: 50%; content: '';}
 .stat-blue::after {background: #e8f4fe;}
@@ -142,7 +142,7 @@ body {background: #fffaf0; color: #333333;}
 .legend_swatch-band1 {background: #d4f0bb;}
 .legend_swatch-band2 {background: #bfe79a;}
 .legend_swatch-median {height: 0; border-top: 2px dashed #2b7a0b; border-radius: 0;}
-.chart-layout {display: grid; grid-template-columns: 1fr 340px; gap: 20px; align-items: start;}
+.chart-layout {display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 20px; align-items: start;}
 
 /* 세그먼트 버튼 */
 .seg {display: flex; gap: 6px; padding: 4px; border-radius: 16px; background: #f4ede0;}
@@ -159,6 +159,7 @@ body {background: #fffaf0; color: #333333;}
 .predict_value {font-weight: 700;}
 
 /* 표 */
+.table-wrap {overflow-x: auto;}
 .table {width: 100%; font-size: 15px;}
 .table_th {padding: 8px 6px; font-size: 13px; font-weight: 600; color: #6b6b6b; text-align: right;}
 .table_th:first-child {text-align: left;}
@@ -174,8 +175,8 @@ body {background: #fffaf0; color: #333333;}
 .empty_mascot {width: 120px; height: 120px; margin: 0 auto 8px;}
 
 /* 기록 목록 */
-.records {display: grid; grid-template-columns: 1fr 1fr; gap: 12px;}
-.record {display: flex; align-items: center; gap: 14px; padding: 14px; border: 2px solid #efe6d6; border-radius: 20px; background: #ffffff; box-shadow: 0 4px 0 #efe6d6;}
+.records {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;}
+.record {display: flex; min-width: 0; align-items: center; gap: 14px; padding: 14px; border: 2px solid #efe6d6; border-radius: 20px; background: #ffffff; box-shadow: 0 4px 0 #efe6d6;}
 .record_thumb {flex-shrink: 0; width: 60px; height: 60px; border-radius: 14px; object-fit: cover;}
 .record_thumb-empty {display: flex; align-items: center; justify-content: center; background: #fff4d1;}
 .record_thumb-empty img {width: 26px; height: 26px;}
@@ -189,7 +190,7 @@ body {background: #fffaf0; color: #333333;}
 .record_memo {display: block; overflow: hidden; margin-top: 4px; font-size: 13px; color: #6b6b6b; white-space: nowrap; text-overflow: ellipsis;}
 
 /* 형제 비교 */
-.family {display: grid; grid-template-columns: 1fr 1fr; gap: 16px;}
+.family {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px;}
 .family_full {grid-column: 1 / -1;}
 .sib {border-left-width: 8px;}
 .sib-color1 {border-left-color: #2b7a0b;}
@@ -216,7 +217,7 @@ body {background: #fffaf0; color: #333333;}
 .sibbar_sub {display: block; font-size: 12px; font-weight: 400; color: #6b6b6b;}
 
 /* 설정 */
-.settings {display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start;}
+.settings {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start;}
 .radio {display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px;}
 .radio_item {display: flex; align-items: flex-start; gap: 10px; padding: 14px; border: 2px solid #efe6d6; border-radius: 16px; cursor: pointer;}
 .radio_item:hover {background: #fffdf8;}
@@ -237,7 +238,7 @@ body {background: #fffaf0; color: #333333;}
 .field_input:hover {border-color: #e2d6c0;}
 .field_input:focus {border-color: #1769c2; background: #ffffff;}
 .field_input-big {padding: 12px 8px; font-size: 28px; font-weight: 700; text-align: center;}
-.field_row {display: grid; grid-template-columns: 1fr 1fr; gap: 12px;}
+.field_row {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;}
 .field_inline {display: flex; gap: 8px;}
 .chips {display: flex; flex-wrap: wrap; gap: 8px;}
 .chip {width: 48px; height: 48px; border: 2px solid #efe6d6; border-radius: 14px; font-size: 24px; background: #ffffff; box-shadow: 0 3px 0 #efe6d6;}
@@ -272,7 +273,7 @@ body {background: #fffaf0; color: #333333;}
 .sheet {position: fixed; inset: 0; z-index: 50; display: none; align-items: center; justify-content: center; padding: 24px;}
 .sheet-open {display: flex;}
 .sheet_dim {position: absolute; inset: 0; background: rgba(40, 30, 10, 0.4);}
-.sheet_panel {position: relative; overflow-y: auto; width: 100%; max-width: 520px; max-height: 90vh; padding: 28px 24px 24px; border-radius: 28px; background: #fffaf0;}
+.sheet_panel {position: relative; overflow-x: hidden; overflow-y: auto; width: 100%; max-width: 520px; max-height: 90vh; padding: 28px 24px 24px; border-radius: 28px; background: #fffaf0;}
 .sheet_close {position: absolute; right: 16px; top: 16px; z-index: 2; width: 38px; height: 38px; border-radius: 50%; background: #f1e9da;}
 .sheet_close:hover {background: #e8dcc6;}
 .sheet_close img {width: 18px; height: 18px; margin: 0 auto;}
@@ -300,7 +301,7 @@ body {background: #fffaf0; color: #333333;}
 .progress_bar {width: 6%; height: 100%; border-radius: 999px; background: #58cc02; box-shadow: inset 0 -4px 0 rgba(0, 0, 0, 0.08);}
 .progress-full {width: 100%; margin-top: 4px;}
 .batch {display: flex; flex-direction: column; gap: 10px; margin: 16px 0 4px;}
-.batch_item {display: grid; grid-template-columns: 64px 1fr; gap: 12px; padding: 12px; border: 2px solid #efe6d6; border-radius: 18px; background: #ffffff;}
+.batch_item {display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 12px; padding: 12px; border: 2px solid #efe6d6; border-radius: 18px; background: #ffffff;}
 .batch_item-off {background: #f7f2e8;}
 .batch_item-off .batch_body {opacity: 0.6;}
 .batch_thumb {width: 64px; height: 64px; border-radius: 12px; object-fit: cover; background: #f4ede0;}
@@ -310,7 +311,8 @@ body {background: #fffaf0; color: #333333;}
 .batch_checkbox {width: 18px; height: 18px; accent-color: #2b7a0b;}
 .batch_status {font-size: 12px; font-weight: 600; color: #6b6b6b;}
 .batch_status-error {color: #c62828;}
-.batch_fields {display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 6px;}
+.batch_error {grid-column: 1 / -1; font-size: 12px; line-height: 1.4; color: #c62828; word-break: break-all;}
+.batch_fields {display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr); gap: 6px;}
 .batch_label {display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 12px; font-weight: 600; color: #6b6b6b;}
 .batch_input {width: 100%; min-width: 0; padding: 8px; border: 2px solid #efe6d6; border-radius: 10px; font-size: 15px; font-weight: 600; color: #333333; background: #fffdf8;}
 .batch_input:focus {border-color: #1769c2; background: #ffffff;}

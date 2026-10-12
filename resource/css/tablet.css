@@ -4,14 +4,14 @@
     .nav {margin-left: auto;}
     .nav_item {padding: 8px 10px; font-size: 14px;}
     .main {padding: 24px 24px 40px;}
-    .home {grid-template-columns: 1fr;}
+    .home {grid-template-columns: minmax(0, 1fr);}
     .home_actions {flex-direction: row;}
     .home_actions .btn {flex: 1;}
-    .stats {grid-template-columns: repeat(4, 1fr);}
+    .stats {grid-template-columns: repeat(4, minmax(0, 1fr));}
     .stat_value {font-size: 28px;}
-    .chart-layout {grid-template-columns: 1fr;}
-    .onboarding {grid-template-columns: 1fr; gap: 24px; max-width: 560px;}
+    .chart-layout {grid-template-columns: minmax(0, 1fr);}
+    .onboarding {grid-template-columns: minmax(0, 1fr); gap: 24px; max-width: 560px;}
     .onboarding_mascot {width: 160px; height: 160px;}
-    .settings {grid-template-columns: 1fr;}
+    .settings {grid-template-columns: minmax(0, 1fr);}
     .footer {padding: 0 24px 32px;}
 }

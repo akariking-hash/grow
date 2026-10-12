@@ -953,12 +953,12 @@ function sameAgeTable() {
     if (!rows.length) {
         return '';
     }
-    return '<article class="card family_full"><h3 class="card_title">같은 나이 때 키</h3><table class="table"><thead><tr><th class="table_th" scope="col">나이</th>' +
+    return '<article class="card family_full"><h3 class="card_title">같은 나이 때 키</h3><div class="table-wrap"><table class="table"><thead><tr><th class="table_th" scope="col">나이</th>' +
         state.children.map((c) => '<th class="table_th" scope="col">' + escapeHtml(c.name) + '</th>').join('') + '</tr></thead><tbody>' +
         rows.map((m) => '<tr><th class="table_td table_td-head" scope="row">' + formatAge(m) + '</th>' + state.children.map((c) => {
             const r = nearest(c, m);
             return '<td class="table_td table_td-num">' + (r ? r.height + 'cm' : '-') + '</td>';
-        }).join('') + '</tr>').join('') + '</tbody></table></article>';
+        }).join('') + '</tr>').join('') + '</tbody></table></div></article>';
 }
 
 function renderSettings(child) {
@@ -1334,13 +1334,24 @@ function setProgress(value) {
     $('[data-progress]').setAttribute('aria-valuenow', String(pct));
 }
 
-/** 사진 한 장 → 썸네일, 사진 찍은 날, 인식 결과 */
-async function analyzePhoto(file, onProgress) {
-    const thumb = await resizeImage(file, 240, 0.6);
-    const photoDate = await photoDateOf(file);
-    const useClaude = state.settings.ocrEngine === 'claude' && state.settings.claudeApiKey;
-    const result = useClaude ? await recognizeWithClaude(file, state.settings.claudeApiKey) : await recognizeOnDevice(file, onProgress);
-    return { thumb: thumb, photoDate: photoDate, result: result };
+/**
+ * 사진 한 장 → 썸네일, 사진 찍은 날, 인식 결과 (onPreview가 있으면 미리보기도 먼저 넘겨줌).
+ * 원본(1200만 화소)을 여러 번 열면 아이폰에서 메모리가 모자라서 한 번만 열고 끝나면 놓아줌.
+ */
+async function analyzePhoto(file, onProgress, onPreview) {
+    const img = await loadImage(file);
+    try {
+        if (onPreview) {
+            onPreview(await resizeImage(img, 900, 0.8));
+        }
+        const thumb = await resizeImage(img, 240, 0.6);
+        const photoDate = await photoDateOf(file);
+        const useClaude = state.settings.ocrEngine === 'claude' && state.settings.claudeApiKey;
+        const result = useClaude ? await recognizeWithClaude(img, state.settings.claudeApiKey) : await recognizeOnDevice(img, onProgress);
+        return { thumb: thumb, photoDate: photoDate, result: result };
+    } finally {
+        img.src = '';
+    }
 }
 
 /** 측정일 고르기: 종이에 인쇄된 검진일 > 사진 찍은 날 */
@@ -1369,12 +1380,12 @@ async function handlePhoto(file) {
     }
     let errorMessage = '';
     try {
-        const preview = await resizeImage(file, 900, 0.8);
-        $('[data-reading-img]').src = preview;
-        $('[data-reading-img]').hidden = false;
-        $('[data-confirm-img]').src = preview;
-        $('[data-confirm-img]').hidden = false;
-        const analyzed = await analyzePhoto(file, setProgress);
+        const analyzed = await analyzePhoto(file, setProgress, (preview) => {
+            $('[data-reading-img]').src = preview;
+            $('[data-reading-img]').hidden = false;
+            $('[data-confirm-img]').src = preview;
+            $('[data-confirm-img]').hidden = false;
+        });
         const result = analyzed.result;
         recordDraft.thumb = analyzed.thumb;
         recordDraft.ocr = result;
@@ -1486,7 +1497,7 @@ function renderBatchItem(index) {
         '<label class="batch_label batch_label-date">측정일<input type="date" class="batch_input" data-batch-field="date" value="' + item.date + '" min="' + child.birth + '" max="' + todayIso() + '"' + (busy ? ' disabled' : '') + '></label>' +
         '<label class="batch_label">키 (cm)<input type="text" class="batch_input" inputmode="decimal" placeholder="0.0" data-batch-field="height" value="' + escapeHtml(item.height) + '"' + (busy ? ' disabled' : '') + '></label>' +
         '<label class="batch_label">몸무게 (kg)<input type="text" class="batch_input" inputmode="decimal" placeholder="0.0" data-batch-field="weight" value="' + escapeHtml(item.weight) + '"' + (busy ? ' disabled' : '') + '></label>' +
-        '</div></div>';
+        '</div>' + (item.status === 'error' && item.error ? '<p class="batch_error">' + escapeHtml(item.error) + '</p>' : '') + '</div>';
 }
 
 function updateBatchSummary() {
@@ -1552,6 +1563,7 @@ async function handlePhotos(fileList) {
             }
             item.thumb = item.thumb || (await resizeImage(files[i], 240, 0.6).catch(() => null));
             item.status = 'error';
+            item.error = error && error.message ? error.message : String(error);
         }
         // 숫자를 찾았고 날짜가 있고 이미 같은 날 기록이 없으면 저장 대상으로 체크
         item.include = item.found && batchItemValid(item) && !batchDuplicate(item);
@@ -1686,29 +1698,51 @@ function loadImage(file) {
     });
 }
 
-/** 긴 변을 maxSide 픽셀로 줄인 JPEG data URL */
-async function resizeImage(file, maxSide, quality) {
-    const img = await loadImage(file);
-    const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+/** 사진 파일이면 열고, 이미 연 사진이면 그대로 */
+async function asImage(source) {
+    return source instanceof Blob ? loadImage(source) : source;
+}
+
+/** 배율 scale로 그린 캔버스 (filter: 흑백 등 보정) */
+function drawScaled(img, scale, options) {
     const canvas = document.createElement('canvas');
-    canvas.width = Math.round(img.naturalWidth * scale);
-    canvas.height = Math.round(img.naturalHeight * scale);
-    canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL('image/jpeg', quality);
+    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    const ctx = canvas.getContext('2d', options && options.readBack ? { willReadFrequently: true } : undefined);
+    if (!ctx) {
+        throw new Error('사진을 처리할 메모리가 부족해요. 사진 수를 줄여 다시 해보세요.');
+    }
+    if (options && options.filter) {
+        ctx.filter = options.filter;
+    }
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return { canvas: canvas, ctx: ctx };
+}
+
+/** 아이폰 사파리는 캔버스 메모리 총량 제한이 있어서, 다 쓴 캔버스는 바로 비움 */
+function freeCanvas(canvas) {
+    canvas.width = 0;
+    canvas.height = 0;
+}
+
+/** 긴 변을 maxSide 픽셀로 줄인 JPEG data URL */
+async function resizeImage(source, maxSide, quality) {
+    const img = await asImage(source);
+    const drawn = drawScaled(img, Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight)));
+    const url = drawn.canvas.toDataURL('image/jpeg', quality);
+    freeCanvas(drawn.canvas);
+    return url;
 }
 
 /** 흑백 + 대비 강화, 작은 사진은 확대 (Tesseract는 글자 높이 20px 이상에서 잘 읽음) */
-async function prepareForOcr(file) {
-    const img = await loadImage(file);
+async function prepareForOcr(source) {
+    const img = await asImage(source);
     const long = Math.max(img.naturalWidth, img.naturalHeight);
     const scale = long < 1600 ? 1600 / long : long > 2400 ? 2400 / long : 1;
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.round(img.naturalWidth * scale);
-    canvas.height = Math.round(img.naturalHeight * scale);
-    const ctx = canvas.getContext('2d');
-    ctx.filter = 'grayscale(1) contrast(1.35)';
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL('image/png');
+    const drawn = drawScaled(img, scale, { filter: 'grayscale(1) contrast(1.35)' });
+    const url = drawn.canvas.toDataURL('image/png');
+    freeCanvas(drawn.canvas);
+    return url;
 }
 
 const scriptCache = {};
@@ -1730,15 +1764,12 @@ function loadScript(src) {
 }
 
 /** 사진 → 픽셀 데이터 (긴 변 maxSide) */
-async function imageDataOf(file, maxSide) {
-    const img = await loadImage(file);
-    const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.round(img.naturalWidth * scale);
-    canvas.height = Math.round(img.naturalHeight * scale);
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    return ctx.getImageData(0, 0, canvas.width, canvas.height);
+async function imageDataOf(source, maxSide) {
+    const img = await asImage(source);
+    const drawn = drawScaled(img, Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight)), { readBack: true });
+    const data = drawn.ctx.getImageData(0, 0, drawn.canvas.width, drawn.canvas.height);
+    freeCanvas(drawn.canvas);
+    return data;
 }
 
 /** 사진 찍은 날 (EXIF). 없거나 읽을 수 없으면 null */
@@ -1755,8 +1786,8 @@ async function photoDateOf(file) {
  * 1) 신장·체중 측정기의 LED 숫자 화면이면 바로 판독 (빠름)
  * 2) 아니면 Tesseract.js(한국어+영어)로 글자를 읽음 — 결과지는 표가 많아 '한 단(4)'과 '흩어진 글자(11)' 두 방식으로 읽고 합침
  */
-async function recognizeOnDevice(file, onProgress) {
-    const led = readLedMeasurement(await imageDataOf(file, 900));
+async function recognizeOnDevice(img, onProgress) {
+    const led = readLedMeasurement(await imageDataOf(img, 900));
     const ledText = led.ledRows.length ? 'LED 화면 판독: ' + led.ledRows.map((r) => r.value).join(' / ') : '';
     if (led.height !== null && led.weight !== null) {
         onProgress(1);
@@ -1766,7 +1797,7 @@ async function recognizeOnDevice(file, onProgress) {
     let pass = 0;
     ocrProgress = (p) => onProgress((pass + p) / 2);
     try {
-        const image = await prepareForOcr(file);
+        const image = await prepareForOcr(img);
         const texts = [];
         let parsed = null;
         for (const psm of ['4', '11']) {
@@ -1823,9 +1854,9 @@ async function releaseOcrWorker() {
 }
 
 /** Claude 비전으로 인식 (손글씨·기울어진 사진에 강함). 사용자의 API 키로 직접 호출 */
-async function recognizeWithClaude(file, apiKey) {
+async function recognizeWithClaude(img, apiKey) {
     const nullable = (type, description) => ({ anyOf: [{ type: type }, { type: 'null' }], description: description });
-    const dataUrl = await resizeImage(file, 1568, 0.85);
+    const dataUrl = await resizeImage(img, 1568, 0.85);
     const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
