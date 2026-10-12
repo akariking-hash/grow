@@ -164,7 +164,8 @@ function rankText(pct) {
 
 const HEIGHT_RANGE = [40, 200];
 const WEIGHT_RANGE = [1.5, 150];
-const NUM_PATTERN = '(?<![\\d.])(\\d{1,3}(?:[.,]\\d{1,2})?)(?!\\d)';
+// 앞뒤가 숫자이거나 '90~200' 같은 범위 표기면 측정값이 아님
+const NUM_PATTERN = '(?<![\\d.]|[~～]\\s?)(\\d{1,3}(?:[.,]\\d{1,2})?)(?!\\d|\\.\\d|\\s*[~～])';
 const HEIGHT_LABEL = '(?:신\\s*장|키(?!로)|height|ht|身長|身高|길이)';
 const WEIGHT_LABEL = '(?:체\\s*중|몸\\s*무\\s*게|weight|wt|體重|体重)';
 const CM_PATTERN = '(?:cm|㎝|c\\s*m|om|crn|센티)';
@@ -284,6 +285,353 @@ function mergeParsed(a, b) {
 
 function isComplete(p) {
     return p.confidence.height === 'high' && p.confidence.weight === 'high' && p.confidence.date === 'high';
+}
+
+/* --------------------------------------------------------------------------
+   2-1. LED 숫자 판독 (신장·체중 자동측정기의 초록/빨강 7세그먼트 화면)
+   글자 인식(Tesseract)은 칸 모양 숫자를 못 읽어서, 켜진 LED 픽셀을 직접 분석합니다.
+   -------------------------------------------------------------------------- */
+
+// 세그먼트 순서: a(위) b(오른쪽 위) c(오른쪽 아래) d(아래) e(왼쪽 아래) f(왼쪽 위) g(가운데)
+const SEGMENT_DIGITS = {
+    '1111110': 0, '0110000': 1, '1101101': 2, '1111001': 3, '0110011': 4,
+    '1011011': 5, '1011111': 6, '1110000': 7, '1111111': 8, '1111011': 9,
+    '0011111': 6, '1110010': 7, '1110011': 9
+};
+// 세그먼트별 확인 영역 [x 시작, x 끝, y 시작, y 끝] (기울기를 바로 세운 숫자 칸 대비 비율)
+const SEGMENT_ZONES = [
+    [0.3, 0.7, 0, 0.15],
+    [0.68, 1, 0.18, 0.4],
+    [0.68, 1, 0.6, 0.82],
+    [0.3, 0.7, 0.85, 1],
+    [0, 0.32, 0.6, 0.82],
+    [0, 0.32, 0.18, 0.4],
+    [0.3, 0.7, 0.43, 0.57]
+];
+
+/** 켜진 LED 픽셀 지도 (초록·빨강 중 더 많은 색). 밝기 기준은 사진마다 가장 밝은 LED 대비 상대값 */
+function ledMask(image) {
+    const total = image.width * image.height;
+    const d = image.data;
+    const strengthOf = (color, i) => (color === 'green' ? d[i * 4 + 1] - Math.max(d[i * 4], d[i * 4 + 2]) : d[i * 4] - Math.max(d[i * 4 + 1], d[i * 4 + 2]));
+    const brightOf = (color, i) => (color === 'green' ? d[i * 4 + 1] : d[i * 4]);
+    let best = null;
+    ['green', 'red'].forEach((color) => {
+        let peakStrength = 0;
+        let peakBright = 0;
+        for (let i = 0; i < total; i += 1) {
+            const strength = strengthOf(color, i);
+            if (strength > peakStrength) {
+                peakStrength = strength;
+            }
+            if (strength > 40 && brightOf(color, i) > peakBright) {
+                peakBright = brightOf(color, i);
+            }
+        }
+        const mask = new Uint8Array(total);
+        let count = 0;
+        const minStrength = Math.max(35, peakStrength * 0.4);
+        const minBright = Math.max(60, peakBright * 0.55);
+        for (let i = 0; i < total; i += 1) {
+            if (strengthOf(color, i) > minStrength && brightOf(color, i) > minBright) {
+                mask[i] = 1;
+                count += 1;
+            }
+        }
+        if (!best || count > best.count) {
+            best = { mask: mask, count: count };
+        }
+    });
+    return best.mask;
+}
+
+/** 0이 아닌 구간들 [시작, 끝) — 간격이 gap 이하면 하나로 합침 */
+function runs(values, minValue, gap) {
+    const out = [];
+    let start = -1;
+    let lastOn = -1;
+    values.forEach((v, i) => {
+        if (v > minValue) {
+            if (start < 0) {
+                start = i;
+            } else if (i - lastOn - 1 > gap) {
+                out.push([start, lastOn + 1]);
+                start = i;
+            }
+            lastOn = i;
+        }
+    });
+    if (start >= 0) {
+        out.push([start, lastOn + 1]);
+    }
+    return out;
+}
+
+function decodeDigit(mask, width, x0, x1, y0, y1) {
+    const h = y1 - y0;
+    const w = x1 - x0;
+    if (w < h * 0.32) {
+        return { digit: 1, exact: true }; // 1은 오른쪽 세로 획만 켜져 폭이 좁음
+    }
+    const lit = SEGMENT_ZONES.map((zone) => {
+        let on = 0;
+        let all = 0;
+        for (let y = Math.floor(y0 + zone[2] * h); y < Math.ceil(y0 + zone[3] * h); y += 1) {
+            for (let x = Math.floor(x0 + zone[0] * w); x < Math.ceil(x0 + zone[1] * w); x += 1) {
+                on += mask[y * width + x];
+                all += 1;
+            }
+        }
+        return all && on / all > 0.18 ? '1' : '0';
+    }).join('');
+    if (lit in SEGMENT_DIGITS) {
+        return { digit: SEGMENT_DIGITS[lit], exact: true };
+    }
+    // 정확히 맞는 모양이 없으면 세그먼트 하나 차이 나는 숫자 중 가장 가까운 것
+    let best = null;
+    Object.keys(SEGMENT_DIGITS).forEach((pattern) => {
+        let diff = 0;
+        for (let i = 0; i < 7; i += 1) {
+            diff += pattern[i] !== lit[i] ? 1 : 0;
+        }
+        if (diff === 1 && best === null) {
+            best = SEGMENT_DIGITS[pattern];
+        }
+    });
+    return best === null ? null : { digit: best, exact: false };
+}
+
+/**
+ * 사진이 돌아가 있으면 LED 줄이 수평이 되도록 회전(±12°).
+ * 줄 방향 히스토그램이 가장 뾰족해지는(줄 사이가 가장 또렷한) 각도를 고름.
+ */
+function straighten(mask, width, height) {
+    const points = [];
+    for (let i = 0; i < mask.length; i += 1) {
+        if (mask[i]) {
+            points.push([i % width, Math.floor(i / width)]);
+        }
+    }
+    let bestAngle = 0;
+    let bestScore = -1;
+    for (let deg = -12; deg <= 12.001; deg += 1) {
+        const rad = (deg * Math.PI) / 180;
+        const sin = Math.sin(rad);
+        const cos = Math.cos(rad);
+        const hist = new Map();
+        points.forEach((p) => {
+            const y = Math.round(p[1] * cos - p[0] * sin);
+            hist.set(y, (hist.get(y) || 0) + 1);
+        });
+        let score = 0;
+        hist.forEach((v) => {
+            score += v * v;
+        });
+        if (score > bestScore) {
+            bestScore = score;
+            bestAngle = rad;
+        }
+    }
+    if (bestAngle === 0 || !points.length) {
+        return { mask: mask, width: width, height: height };
+    }
+    const sin = Math.sin(bestAngle);
+    const cos = Math.cos(bestAngle);
+    const moved = points.map((p) => [Math.round(p[0] * cos + p[1] * sin), Math.round(p[1] * cos - p[0] * sin)]);
+    const minX = Math.min.apply(null, moved.map((p) => p[0]));
+    const minY = Math.min.apply(null, moved.map((p) => p[1]));
+    const w = Math.max.apply(null, moved.map((p) => p[0])) - minX + 1;
+    const h = Math.max.apply(null, moved.map((p) => p[1])) - minY + 1;
+    const out = new Uint8Array(w * h);
+    // 회전하면서 생긴 빈틈을 메우기 위해 오른쪽·아래 한 칸도 채움
+    moved.forEach((p) => {
+        const x = p[0] - minX;
+        const y = p[1] - minY;
+        out[y * w + x] = 1;
+        if (x + 1 < w) {
+            out[y * w + x + 1] = 1;
+        }
+        if (y + 1 < h) {
+            out[(y + 1) * w + x] = 1;
+        }
+    });
+    return { mask: out, width: w, height: h };
+}
+
+/**
+ * 한 줄을 잘라 기울기(이탤릭 글꼴·사진 회전)를 바로 세움.
+ * 세로 획이 가장 곧게 서는(차지하는 열 수가 가장 적은) 기울기를 찾아 x' = x + s·(y − 중심)으로 옮김.
+ */
+function deskewBand(mask, width, y0, y1) {
+    const points = [];
+    for (let y = y0; y < y1; y += 1) {
+        for (let x = 0; x < width; x += 1) {
+            if (mask[y * width + x]) {
+                points.push([x, y - y0]);
+            }
+        }
+    }
+    const h = y1 - y0;
+    const mid = h / 2;
+    let bestShear = 0;
+    let bestColumns = Infinity;
+    for (let shear = -0.4; shear <= 0.4001; shear += 0.02) {
+        const used = new Set();
+        points.forEach((p) => used.add(Math.round(p[0] + shear * (p[1] - mid))));
+        if (used.size < bestColumns) {
+            bestColumns = used.size;
+            bestShear = shear;
+        }
+    }
+    let minX = Infinity;
+    let maxX = -Infinity;
+    const moved = points.map((p) => {
+        const x = Math.round(p[0] + bestShear * (p[1] - mid));
+        minX = Math.min(minX, x);
+        maxX = Math.max(maxX, x);
+        return [x, p[1]];
+    });
+    const subWidth = moved.length ? maxX - minX + 1 : 0;
+    const subMask = new Uint8Array(subWidth * h);
+    moved.forEach((p) => {
+        subMask[p[1] * subWidth + (p[0] - minX)] = 1;
+    });
+    return { mask: subMask, width: subWidth, height: h };
+}
+
+/**
+ * 화면 이미지({width, height, data: RGBA})에서 LED 숫자 줄을 위에서부터 읽음.
+ * 자동측정기는 소수점 한 자리 고정(129.3)이라 마지막 숫자를 소수 첫째 자리로 봄.
+ */
+function readLedRows(image) {
+    const upright = straighten(ledMask(image), image.width, image.height);
+    const mask = upright.mask;
+    const W = upright.width;
+    const H = upright.height;
+    const rowSums = new Array(H).fill(0);
+    for (let y = 0; y < H; y += 1) {
+        for (let x = 0; x < W; x += 1) {
+            rowSums[y] += mask[y * W + x];
+        }
+    }
+    const minRow = Math.max(2, W * 0.004);
+    const bands = runs(rowSums, minRow, Math.round(H * 0.012)).filter((b) => b[1] - b[0] >= H * 0.015);
+    const rows = [];
+    bands.forEach((band) => {
+        const sub = deskewBand(mask, W, band[0], band[1]);
+        const h = sub.height;
+        const colSums = new Array(sub.width).fill(0);
+        for (let y = 0; y < h; y += 1) {
+            for (let x = 0; x < sub.width; x += 1) {
+                colSums[x] += sub.mask[y * sub.width + x];
+            }
+        }
+        // 소수점처럼 낮은 덩어리는 버리고, 숫자 높이의 60% 이상인 덩어리만 숫자로 봄
+        const cells = runs(colSums, 0, Math.round(h * 0.06)).filter((c) => {
+            let top = h;
+            let bottom = 0;
+            for (let y = 0; y < h; y += 1) {
+                for (let x = c[0]; x < c[1]; x += 1) {
+                    if (sub.mask[y * sub.width + x]) {
+                        top = Math.min(top, y);
+                        bottom = Math.max(bottom, y);
+                    }
+                }
+            }
+            return bottom - top >= h * 0.6 && c[1] - c[0] <= h * 1.1;
+        });
+        if (cells.length < 2 || cells.length > 5) {
+            return;
+        }
+        const digits = cells.map((c) => decodeDigit(sub.mask, sub.width, c[0], c[1], 0, h));
+        if (digits.some((d) => d === null)) {
+            return;
+        }
+        rows.push({
+            value: Number(digits.map((d) => d.digit).join('')) / 10,
+            exact: digits.every((d) => d.exact)
+        });
+    });
+    return rows;
+}
+
+/** LED 줄들 → 키·몸무게 (위에서부터 키, 그다음 몸무게 순서인 기계가 대부분) */
+function readLedMeasurement(image) {
+    const rows = readLedRows(image);
+    const result = { height: null, weight: null, date: null, confidence: { height: 'none', weight: 'none', date: 'none' }, ledRows: rows };
+    const i = rows.findIndex((r) => inRange(r.value, HEIGHT_RANGE));
+    if (i >= 0) {
+        result.height = rows[i].value;
+        result.confidence.height = rows[i].exact ? 'high' : 'low';
+    }
+    const weightRow = rows.slice(i + 1).find((r) => inRange(r.value, WEIGHT_RANGE));
+    if (weightRow) {
+        result.weight = weightRow.value;
+        result.confidence.weight = weightRow.exact ? 'high' : 'low';
+    }
+    return result;
+}
+
+/* --------------------------------------------------------------------------
+   2-2. 사진 찍은 날짜 (JPEG EXIF DateTimeOriginal)
+   -------------------------------------------------------------------------- */
+
+function readExifDate(buffer) {
+    const view = new DataView(buffer);
+    if (view.byteLength < 4 || view.getUint16(0) !== 0xffd8) {
+        return null;
+    }
+    let offset = 2;
+    while (offset + 4 < view.byteLength) {
+        const marker = view.getUint16(offset);
+        const size = view.getUint16(offset + 2);
+        if (marker === 0xffe1 && view.getUint32(offset + 4) === 0x45786966) { // 'Exif'
+            return readTiffDate(view, offset + 10);
+        }
+        if ((marker & 0xff00) !== 0xff00 || marker === 0xffda) {
+            return null;
+        }
+        offset += 2 + size;
+    }
+    return null;
+}
+
+function readTiffDate(view, tiff) {
+    const little = view.getUint16(tiff) === 0x4949;
+    const u16 = (p) => view.getUint16(p, little);
+    const u32 = (p) => view.getUint32(p, little);
+    const readIfd = (ifdOffset) => {
+        const entries = {};
+        const start = tiff + ifdOffset;
+        if (start + 2 > view.byteLength) {
+            return entries;
+        }
+        const count = u16(start);
+        for (let i = 0; i < count; i += 1) {
+            const entry = start + 2 + i * 12;
+            if (entry + 12 > view.byteLength) {
+                break;
+            }
+            entries[u16(entry)] = { type: u16(entry + 2), count: u32(entry + 4), value: entry + 8 };
+        }
+        return entries;
+    };
+    const asText = (e) => {
+        if (!e || e.type !== 2) {
+            return null;
+        }
+        const p = e.count > 4 ? tiff + u32(e.value) : e.value;
+        let s = '';
+        for (let i = 0; i < e.count - 1 && p + i < view.byteLength; i += 1) {
+            s += String.fromCharCode(view.getUint8(p + i));
+        }
+        return s;
+    };
+    const ifd0 = readIfd(u32(tiff + 4));
+    const exif = ifd0[0x8769] ? readIfd(u32(ifd0[0x8769].value)) : {};
+    const raw = asText(exif[0x9003]) || asText(exif[0x9004]) || asText(ifd0[0x0132]);
+    const m = raw && raw.match(/^(\d{4}):(\d{2}):(\d{2})/);
+    return m && m[1] !== '0000' ? m[1] + '-' + m[2] + '-' + m[3] : null;
 }
 
 /* --------------------------------------------------------------------------
@@ -1004,10 +1352,19 @@ async function handlePhoto(file) {
         $('[data-confirm-img]').src = preview;
         $('[data-confirm-img]').hidden = false;
         const useClaude = state.settings.ocrEngine === 'claude' && state.settings.claudeApiKey;
+        const photoDate = await photoDateOf(file);
         const result = useClaude ? await recognizeWithClaude(file, state.settings.claudeApiKey) : await recognizeOnDevice(file, setProgress);
         recordDraft.ocr = result;
-        if (result.date) {
+        // 측정일: 종이에 인쇄된 검진일 > 사진 찍은 날
+        const child = activeChild();
+        const validDate = (d) => d && d >= child.birth && d <= todayIso();
+        let dateLabel = '';
+        if (validDate(result.date)) {
             $('[data-field="date"]').value = result.date;
+            dateLabel = '자동 인식';
+        } else if (validDate(photoDate)) {
+            $('[data-field="date"]').value = photoDate;
+            dateLabel = '사진 찍은 날';
         }
         if (result.height) {
             $('[data-field="height"]').value = result.height;
@@ -1015,10 +1372,11 @@ async function handlePhoto(file) {
         if (result.weight) {
             $('[data-field="weight"]').value = result.weight;
         }
-        ['date', 'height', 'weight'].forEach((key) => {
+        ['height', 'weight'].forEach((key) => {
             const level = result.confidence[key];
             $('[data-tag="' + key + '"]').innerHTML = level === 'none' ? '' : '<span class="tag tag-' + level + '">' + (level === 'high' ? '자동 인식' : '확인 필요') + '</span>';
         });
+        $('[data-tag="date"]').innerHTML = dateLabel ? '<span class="tag tag-high">' + dateLabel + '</span>' : '';
         if (result.rawText) {
             $('[data-raw]').textContent = result.rawText.trim();
             $('[data-raw-wrap]').hidden = false;
@@ -1140,8 +1498,39 @@ function loadScript(src) {
     return scriptCache[src];
 }
 
-/** 기기 안에서 인식 (Tesseract.js, 한국어+영어) — 결과지는 표가 많아 '한 단(4)'과 '흩어진 글자(11)' 두 방식으로 읽고 합침 */
+/** 사진 → 픽셀 데이터 (긴 변 maxSide) */
+async function imageDataOf(file, maxSide) {
+    const img = await loadImage(file);
+    const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(img.naturalWidth * scale);
+    canvas.height = Math.round(img.naturalHeight * scale);
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return ctx.getImageData(0, 0, canvas.width, canvas.height);
+}
+
+/** 사진 찍은 날 (EXIF). 없거나 읽을 수 없으면 null */
+async function photoDateOf(file) {
+    try {
+        return readExifDate(await file.slice(0, 262144).arrayBuffer());
+    } catch (error) {
+        return null;
+    }
+}
+
+/**
+ * 기기 안에서 인식.
+ * 1) 신장·체중 측정기의 LED 숫자 화면이면 바로 판독 (빠름)
+ * 2) 아니면 Tesseract.js(한국어+영어)로 글자를 읽음 — 결과지는 표가 많아 '한 단(4)'과 '흩어진 글자(11)' 두 방식으로 읽고 합침
+ */
 async function recognizeOnDevice(file, onProgress) {
+    const led = readLedMeasurement(await imageDataOf(file, 900));
+    const ledText = led.ledRows.length ? 'LED 화면 판독: ' + led.ledRows.map((r) => r.value).join(' / ') : '';
+    if (led.height !== null && led.weight !== null) {
+        onProgress(1);
+        return Object.assign(led, { rawText: ledText });
+    }
     await loadScript(TESSERACT_URL);
     let pass = 0;
     const worker = await Tesseract.createWorker(['kor', 'eng'], 1, {
@@ -1167,7 +1556,8 @@ async function recognizeOnDevice(file, onProgress) {
             }
         }
         onProgress(1);
-        return Object.assign(parsed, { rawText: texts.join('\n---\n') });
+        // LED에서 찾은 값이 있으면 그것을 우선
+        return Object.assign(mergeParsed(led, parsed), { rawText: [ledText].concat(texts).filter(Boolean).join('\n---\n') });
     } finally {
         await worker.terminate();
     }
@@ -1451,7 +1841,8 @@ if (typeof module !== 'undefined' && module.exports) {
     // 단위 테스트(node --test)용
     module.exports = {
         zScore, valueAtZ, percentile, normCdf, normInv, predictAdultHeight, ageInMonths, formatAge, rankText,
-        bmiStatus, calcBmi, parseMeasurement, mergeParsed, isComplete, findDate, hasBatchim
+        bmiStatus, calcBmi, parseMeasurement, mergeParsed, isComplete, findDate, hasBatchim,
+        readLedRows, readLedMeasurement, readExifDate
     };
 } else {
     document.addEventListener('DOMContentLoaded', initApp);
